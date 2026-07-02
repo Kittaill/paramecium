@@ -144,8 +144,22 @@ def get_db():
     return db
 
 def ensure_schema():
-    """Add heat/energy/polarity columns if missing."""
+    """Create the memories table on cold start, then add newer columns if missing."""
     db = get_db()
+    # 冷启动建表：原部署的库带着历史长大，从没在空目录里启动过（2026-07-02 修）
+    db.execute('''CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        summary TEXT DEFAULT '',
+        date TEXT DEFAULT '',
+        emotion TEXT DEFAULT 'neutral',
+        intensity INTEGER DEFAULT 3,
+        resolved INTEGER DEFAULT 0,
+        pinned INTEGER DEFAULT 0,
+        activated INTEGER DEFAULT 0,
+        tags TEXT DEFAULT '[]',
+        filename TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+    )''')
     cols = [r[1] for r in db.execute("PRAGMA table_info(memories)").fetchall()]
     for col, typ, default in [
         ('heat', 'REAL', '1.0'),
