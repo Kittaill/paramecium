@@ -421,8 +421,32 @@ body.sidebar-action-open .rename-dialog input{-webkit-user-select:text;user-sele
     <section class="profile-section">
       <button class="profile-nav-row" id="gwOpenPrompt"><span class="profile-nav-row-icon" data-profile-icon="pencil"></span><span class="profile-nav-row-title">System prompt<span class="profile-nav-row-note" id="gwPromptNote">Loading…</span></span><span class="profile-nav-chevron">›</span></button>
       <button class="profile-nav-row" id="gwOpenAccounts"><span class="profile-nav-row-icon" data-profile-icon="projects"></span><span class="profile-nav-row-title">API channels<span class="profile-nav-row-note" id="gwAccountsNote">Loading…</span></span><span class="profile-nav-chevron">›</span></button>
+      <button class="profile-nav-row" id="gwOpenMemories"><span class="profile-nav-row-icon" data-profile-icon="memory"></span><span class="profile-nav-row-title">Memory 记忆库<span class="profile-nav-row-note" id="gwMemoriesNote">Loading…</span></span><span class="profile-nav-chevron">›</span></button>
       <button class="profile-nav-row" id="gwOpenStats"><span class="profile-nav-row-icon" data-profile-icon="history"></span><span class="profile-nav-row-title">Usage &amp; cache<span class="profile-nav-row-note" id="gwStatsNote">24h 统计</span></span><span class="profile-nav-chevron">›</span></button>
     </section>
+  </div>
+  <div class="profile-page" id="gwMemoriesPage">
+    <header class="profile-header">
+      <button class="profile-back-button" id="gwBackFromMemories" aria-label="Back"></button>
+      <div class="profile-title">Memory 记忆库</div>
+      <button class="profile-save-button" id="gwSaveProfileMd" aria-label="Save profiles" disabled>✓</button>
+    </header>
+    <section class="profile-section">
+      <div class="profile-section-title">L2 画像（每条消息注入，进缓存段；改动请攒着保存）</div>
+      <div class="profile-card">
+        <div class="profile-section-title">user.md — 关于她</div>
+        <textarea class="profile-memory-textarea" id="gwProfileUser" placeholder="手工维护的稳定事实，留空则不注入"></textarea>
+        <div class="profile-divider"></div>
+        <div class="profile-section-title">relationship.md — 关于我们</div>
+        <textarea class="profile-memory-textarea" id="gwProfileRel" placeholder="关系相关的稳定事实，留空则不注入"></textarea>
+      </div>
+    </section>
+    <section class="profile-section">
+      <div class="profile-section-title">L1 记忆条目（自动摘录，带逐字引用；检索不涨热度）</div>
+      <div class="profile-card" style="padding:10px 16px"><input class="profile-name-input" id="gwMemSearch" placeholder="语义检索记忆…（回车搜索，清空显示全部）" autocomplete="off"></div>
+      <div class="profile-memory-list" id="gwMemList"></div>
+    </section>
+    <div style="height:calc(env(safe-area-inset-bottom) + 32px)"></div>
   </div>
   <div class="profile-page" id="gwPromptPage">
     <header class="profile-header">
@@ -2035,7 +2059,7 @@ function formatDiaryDate(ds){try{const[y,m,d]=ds.split('-').map(Number);const dt
 // ===== Gateway settings panel =====
 let _gwSettings=null,_gwDirtyPrompt=false,_gwDirtyAccounts=false;
 function gwShowPage(id){document.querySelectorAll('#gatewayPanel .profile-page').forEach(p=>p.classList.toggle('active',p.id===id))}
-async function gwLoad(){const r=await api('/api/settings');if(!r.ok)throw Error('load failed');_gwSettings=await r.json();gwRenderHome()}
+async function gwLoad(){const r=await api('/api/settings');if(!r.ok)throw Error('load failed');_gwSettings=await r.json();gwRenderHome();gwLoadMemoriesNote()}
 async function gwSave(patch){const merged={..._gwSettings,...patch};const r=await api('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(merged)});if(!r.ok)throw Error('save failed');_gwSettings=merged;gwRenderHome();toast('Saved')}
 function gwRenderHome(){const sp=_gwSettings?.systemPrompt||'';$('gwPromptNote').textContent=sp?`${sp.length} chars`:'Empty — 未注入人设';const n=(_gwSettings?.accounts||[]).length;const mc=(_gwSettings?.accounts||[]).reduce((t,a)=>t+((a.models&&a.models.length)||(a.model?1:0)),0);$('gwAccountsNote').textContent=n?`${n} channel${n>1?'s':''} · ${mc} models`:'No channels'}
 $('openGateway').onclick=async()=>{try{closeDrawer();$('gatewayPanel').classList.add('show');$('gatewayPanel').setAttribute('aria-hidden','false');gwShowPage('gwHome');await gwLoad()}catch(e){toast('Settings 加载失败')}};
@@ -2053,6 +2077,17 @@ $('gwBackFromAccounts').onclick=()=>{if(_gwDirtyAccounts&&!confirm('未保存的
 function gwStatRow(label,value){return `<div class="gw-stat-row"><span class="gw-stat-label">${label}</span><span class="gw-stat-value">${value}</span></div>`}
 $('gwOpenStats').onclick=async()=>{gwShowPage('gwStatsPage');const el=$('gwStatsContent');el.innerHTML='<div class="profile-empty">Loading…</div>';try{const r=await api('/gateway/stats');if(!r.ok)throw Error();const s=await r.json();const u=s.tokenUsage||{};el.innerHTML='<div class="profile-card">'+gwStatRow('请求数（24h）',s.totalRequests||0)+gwStatRow('缓存命中率',(s.avgHitRate||0)+'%')+gwStatRow('命中 / 未命中',(s.cacheHits||0)+' / '+(s.cacheMisses||0))+gwStatRow('输入 tokens',(u.input||0).toLocaleString())+gwStatRow('缓存读取 tokens',(u.cacheRead||0).toLocaleString())+gwStatRow('缓存写入 tokens',(u.cacheCreate||0).toLocaleString())+gwStatRow('输出 tokens',(u.output||0).toLocaleString())+gwStatRow('错误数（24h）',s.totalErrors||0)+'</div>'}catch(e){el.innerHTML='<div class="profile-empty">统计加载失败</div>'}};
 $('gwBackFromStats').onclick=()=>gwShowPage('gwHome');
+// ===== Memory 记忆库页 =====
+let _gwProfileDirty=false;
+async function gwLoadMemoriesNote(){try{const r=await api('/api/memory-stats');const s=await r.json();$('gwMemoriesNote').textContent=r.ok?`${s.sqlite_memories||0} 条记忆 · ${s.vectors||0} 向量`:'记忆网关未运行'}catch{$('gwMemoriesNote').textContent='记忆网关未运行'}}
+function gwMemCard(m){const card=document.createElement('div');card.className='profile-memory-card';const txt=document.createElement('div');txt.style.cssText='font:400 15px/1.5 var(--font-sans);white-space:pre-wrap';txt.textContent=m.summary;card.append(txt);const meta=document.createElement('div');meta.className='profile-help-text';let tags='';try{tags=JSON.parse(m.tags||'[]').join(' · ')}catch{}meta.textContent=[m.date,tags,`想起 ${m.access_count||0} 次`].filter(Boolean).join('　');meta.style.marginTop='8px';card.append(meta);const actions=document.createElement('div');actions.className='profile-memory-actions';actions.style.marginTop='10px';const pin=document.createElement('button');pin.className='profile-mini-button';pin.textContent=m.pinned?'★ 已钉选':'☆ 钉选';if(m.pinned)pin.style.color='var(--accent)';pin.onclick=async()=>{try{const r=await api('/api/memories/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:m.id,pinned:m.pinned?0:1})});if(!r.ok)throw Error();m.pinned=!m.pinned;pin.textContent=m.pinned?'★ 已钉选':'☆ 钉选';pin.style.color=m.pinned?'var(--accent)':'';toast(m.pinned?'已钉选，永不衰减':'已取消钉选')}catch{toast('操作失败')}};const del=document.createElement('button');del.className='profile-mini-button profile-danger';del.textContent='Delete';del.onclick=async()=>{if(!confirm('删除这条记忆？此操作不可逆。'))return;try{const r=await api(`/api/memories/${encodeURIComponent(m.id)}`,{method:'DELETE'});if(!r.ok)throw Error();card.remove();toast('已删除')}catch{toast('删除失败')}};actions.append(pin,del);card.append(actions);return card}
+async function gwLoadMemList(q){const list=$('gwMemList');list.innerHTML='<div class="profile-empty">Loading…</div>';try{const r=await api('/api/memories'+(q?`?q=${encodeURIComponent(q)}`:''));const d=await r.json();if(!r.ok)throw Error(d.detail||'');list.innerHTML='';if(!(d.memories||[]).length){list.innerHTML='<div class="profile-empty">'+(q?'没有匹配的记忆':'还没有记忆，聊过天后摘录员每十分钟自动入库')+'</div>';return}d.memories.forEach(m=>list.append(gwMemCard(m)))}catch(e){list.innerHTML='<div class="profile-empty">记忆网关未运行</div>'}}
+$('gwOpenMemories').onclick=async()=>{gwShowPage('gwMemoriesPage');_gwProfileDirty=false;$('gwSaveProfileMd').disabled=true;try{const r=await api('/api/memory');const d=await r.json();$('gwProfileUser').value=d.user||'';$('gwProfileRel').value=d.relationship||''}catch{}$('gwMemSearch').value='';gwLoadMemList('')};
+['gwProfileUser','gwProfileRel'].forEach(id=>$(id).addEventListener('input',()=>{_gwProfileDirty=true;$('gwSaveProfileMd').disabled=false}));
+$('gwSaveProfileMd').onclick=async()=>{try{const r=await api('/api/memory',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:$('gwProfileUser').value,relationship:$('gwProfileRel').value})});if(!r.ok)throw Error();_gwProfileDirty=false;$('gwSaveProfileMd').disabled=true;toast('Saved')}catch{toast('保存失败')}};
+$('gwBackFromMemories').onclick=()=>{if(_gwProfileDirty&&!confirm('未保存的画像修改将丢失，确定返回？'))return;gwShowPage('gwHome')};
+let _gwMemSearchTimer=null;
+$('gwMemSearch').addEventListener('input',()=>{clearTimeout(_gwMemSearchTimer);_gwMemSearchTimer=setTimeout(()=>gwLoadMemList($('gwMemSearch').value.trim()),400)});
 $('gatewayNavIcon').innerHTML=_SVG_GEAR;
 ['profileSave','profileSaveMemories','profileSavePreferences'].forEach(id=>$(id).onclick=async()=>{try{await saveProfile()}catch(e){toast('保存失败')}});
 document.querySelectorAll('.profile-back-button').forEach(btn=>btn.innerHTML=icon('chevronLeft'));

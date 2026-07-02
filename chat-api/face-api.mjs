@@ -631,17 +631,78 @@ export async function handleFaceRequest(req, res, url) {
     return true;
   }
 
-  // 记忆（L2 画像层 user.md 的在线编辑）与日记
+  // L2 画像层（user.md / relationship.md）在线编辑
   if (method === 'GET' && path === '/api/memory') {
-    let content = '';
-    try { content = readFileSync(MEM_DIR + '/profile/user.md', 'utf8'); } catch {}
-    json(res, { content });
+    let user = '', relationship = '';
+    try { user = readFileSync(MEM_DIR + '/profile/user.md', 'utf8'); } catch {}
+    try { relationship = readFileSync(MEM_DIR + '/profile/relationship.md', 'utf8'); } catch {}
+    json(res, { user, relationship });
     return true;
   }
   if (method === 'PUT' && path === '/api/memory') {
     const body = JSON.parse(await readBody(req) || '{}');
-    writeFileSync(MEM_DIR + '/profile/user.md', String(body.content || ''));
+    if (body.user !== undefined) writeFileSync(MEM_DIR + '/profile/user.md', String(body.user));
+    if (body.relationship !== undefined) writeFileSync(MEM_DIR + '/profile/relationship.md', String(body.relationship));
     json(res, { saved: true });
+    return true;
+  }
+
+  // L1 记忆库管理 — 认证代理到 3900。浏览检索用 boost_heat:false，
+  // 不涨 access_count：翻档案柜不算"被想起"
+  if (method === 'GET' && path === '/api/memories') {
+    const q = url.searchParams.get('q');
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 200);
+    try {
+      if (q) {
+        const r = await fetch('http://127.0.0.1:3900/search', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, n: limit, boost_heat: false })
+        });
+        const d = await r.json();
+        const items = (d.results || []).map(x => ({
+          id: x.id, summary: x.metadata?.summary || x.document || '',
+          date: x.metadata?.date || '', tags: x.metadata?.tags || '[]',
+          pinned: !!x.metadata?.pinned, access_count: x.metadata?.access_count || 0,
+          score: x.score
+        }));
+        json(res, { memories: items });
+      } else {
+        const r = await fetch(`http://127.0.0.1:3900/query?limit=${limit}`);
+        const rows = await r.json();
+        const items = (Array.isArray(rows) ? rows : []).map(x => ({
+          id: x.id, summary: x.summary || '', date: x.date || '',
+          tags: x.tags || '[]', pinned: !!x.pinned, access_count: x.access_count || 0
+        }));
+        json(res, { memories: items });
+      }
+    } catch (e) { json(res, { memories: [], detail: '记忆网关不可用: ' + e.message }, 502); }
+    return true;
+  }
+  if (method === 'POST' && path === '/api/memories/update') {
+    try {
+      const body = await readBody(req);
+      const r = await fetch('http://127.0.0.1:3900/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+      });
+      json(res, await r.json(), r.status);
+    } catch (e) { json(res, { detail: e.message }, 502); }
+    return true;
+  }
+  if (method === 'DELETE' && (m = path.match(/^\/api\/memories\/([^/]+)$/))) {
+    try {
+      const r = await fetch('http://127.0.0.1:3900/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: decodeURIComponent(m[1]) })
+      });
+      json(res, await r.json(), r.status);
+    } catch (e) { json(res, { detail: e.message }, 502); }
+    return true;
+  }
+  if (method === 'GET' && path === '/api/memory-stats') {
+    try {
+      const r = await fetch('http://127.0.0.1:3900/health');
+      json(res, await r.json());
+    } catch { json(res, { status: 'down' }, 502); }
     return true;
   }
   if (method === 'GET' && path === '/api/diary') { json(res, { entries: diaryEntries() }); return true; }
