@@ -748,10 +748,25 @@ const BUILTIN_TOOLS = [{
   }
 }];
 
-// exec = 给模型一个 root shell。README 的安全章节早已建议默认禁用，
-// 但代码里一直没锁——现在默认只发 recall，settings.enableExec 为 true 才发 exec。
-function builtinTools(settings) {
-  return settings.enableExec ? BUILTIN_TOOLS : BUILTIN_TOOLS.filter(t => t.name !== 'exec');
+// 工具按需广告，不打空头广告：
+// - recall 只在记忆网关（3900）健康时才发——服务没起时发这个工具，
+//   不仅调用必败，光是"你们的长期记忆"这几个字就足以让裸模型
+//   脑补出一个专属助手人设，污染无提示词状态下的身份认知
+// - exec = root shell，settings.enableExec 显式开启才发
+let _memHealth = { ok: false, ts: 0 };
+async function memoryGatewayUp() {
+  if (Date.now() - _memHealth.ts < 60000) return _memHealth.ok;
+  try {
+    const r = await fetch('http://127.0.0.1:3900/health', { signal: AbortSignal.timeout(800) });
+    _memHealth = { ok: r.ok, ts: Date.now() };
+  } catch { _memHealth = { ok: false, ts: Date.now() }; }
+  return _memHealth.ok;
+}
+async function builtinTools(settings) {
+  const tools = [];
+  if (await memoryGatewayUp()) tools.push(BUILTIN_TOOLS.find(t => t.name === 'recall'));
+  if (settings.enableExec) tools.push(BUILTIN_TOOLS.find(t => t.name === 'exec'));
+  return tools.filter(Boolean);
 }
 
 async function callBuiltinTool(name, input) {
@@ -985,7 +1000,7 @@ export async function handleGatewaySend(reqBody, res) {
   // Tools: built-ins (in-process, Anthropic only) + MCP
   const mcpTools = await getMcpTools(settings);
   const toolDefs = [
-    ...(isAnthropic ? builtinTools(settings) : []),
+    ...(isAnthropic ? await builtinTools(settings) : []),
     ...mcpTools.map(t => ({name: t.name, description: t.description, input_schema: t.input_schema}))
   ];
   if (toolDefs.length) {
