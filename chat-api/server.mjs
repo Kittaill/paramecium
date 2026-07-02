@@ -1,4 +1,5 @@
 import { handleGatewaySend, getGatewayStats, getContextBlocks, getMcpStatus } from "./gateway.mjs";
+import { handleFaceRequest } from "./face-api.mjs";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, statSync } from 'fs';
 import http from 'http';
 
@@ -53,6 +54,15 @@ http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { json(res, {}); return; }
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+
+  // face（Claude.ai 风格前端壳）：静态文件 + /api/* 契约，见 face-api.mjs
+  try {
+    if (await handleFaceRequest(req, res, url)) return;
+  } catch (e) {
+    console.error('[face]', e.message);
+    if (!res.headersSent) { json(res, { detail: e.message }, 500); }
+    return;
+  }
 
   // GET /conversations - list all
   if (req.method === 'GET' && path === '/conversations') {
