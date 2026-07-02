@@ -748,6 +748,12 @@ const BUILTIN_TOOLS = [{
   }
 }];
 
+// exec = 给模型一个 root shell。README 的安全章节早已建议默认禁用，
+// 但代码里一直没锁——现在默认只发 recall，settings.enableExec 为 true 才发 exec。
+function builtinTools(settings) {
+  return settings.enableExec ? BUILTIN_TOOLS : BUILTIN_TOOLS.filter(t => t.name !== 'exec');
+}
+
 async function callBuiltinTool(name, input) {
   if (name === 'exec') {
     const cmd = (input?.command || '').trim();
@@ -979,7 +985,7 @@ export async function handleGatewaySend(reqBody, res) {
   // Tools: built-ins (in-process, Anthropic only) + MCP
   const mcpTools = await getMcpTools(settings);
   const toolDefs = [
-    ...(isAnthropic ? BUILTIN_TOOLS : []),
+    ...(isAnthropic ? builtinTools(settings) : []),
     ...mcpTools.map(t => ({name: t.name, description: t.description, input_schema: t.input_schema}))
   ];
   if (toolDefs.length) {
