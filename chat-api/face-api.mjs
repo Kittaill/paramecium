@@ -311,6 +311,14 @@ async function handleChat(req, res) {
 
   const shim = makeTranslatingRes(res);
 
+  // body.model 是 "渠道::模型" 复合键；旧的纯渠道名也兼容
+  let accountName, modelOverride;
+  if (body.model) {
+    const sep = String(body.model).indexOf(MODEL_SEP);
+    if (sep > 0) { accountName = body.model.slice(0, sep); modelOverride = body.model.slice(sep + MODEL_SEP.length); }
+    else accountName = body.model;
+  }
+
   try {
     // handleGatewaySend 内部会等 saveConv / checkCycle 全部做完才返回，
     // 所以 done 必须发在 await 之后——early emit 会读到落盘前的旧计数
@@ -319,7 +327,8 @@ async function handleChat(req, res) {
       message: sendMessage,
       image_data: imageData,
       image_media_type: imageMediaType,
-      account: body.model || undefined,
+      account: accountName,
+      model: modelOverride,
       edit_at: editAt
     }, shim);
     if (!shim.state.sawError) {
@@ -437,6 +446,18 @@ function splashLine(period) {
   return "What's on your mind?";
 }
 
+// 渠道与模型解耦：accounts 是渠道（endpoint+key+models 列表），
+// 下拉菜单展开渠道下的全部模型，id 用 "渠道::模型" 复合键。
+// 兼容旧格式：没有 models 数组的渠道回落到单个 model 字段。
+const MODEL_SEP = '::';
+
+function channelModels(account) {
+  const list = Array.isArray(account.models) && account.models.length
+    ? account.models
+    : (account.model ? [account.model] : []);
+  return list.filter(Boolean);
+}
+
 function listModels() {
   let settings = {};
   try { settings = JSON.parse(readFileSync(DATA + '/settings.json', 'utf8')); } catch {}
@@ -444,10 +465,32 @@ function listModels() {
   if (!accounts.length) {
     return [{ id: 'default', label: settings.model || 'Default', desc: settings.endpoint || '', thinking: 'adaptive', primary: true }];
   }
-  return accounts.map((a, i) => ({
-    id: a.name, label: a.label || a.name, desc: a.model || '',
-    thinking: 'adaptive', primary: i < 4
-  }));
+  const out = [];
+  for (const a of accounts) {
+    for (const m of channelModels(a)) {
+      out.push({
+        id: `${a.name}${MODEL_SEP}${m}`,
+        label: m, desc: a.label || a.name,
+        thinking: 'adaptive', primary: out.length < 4
+      });
+    }
+  }
+  return out.length ? out : [{ id: 'default', label: 'Default', desc: '渠道未配置模型', thinking: 'adaptive', primary: true }];
+}
+
+// 拉取渠道的可用模型列表（服务端代发，key 不出网关）
+async function fetchChannelModels(account) {
+  const base = (account.endpoint || '').replace(/\/+$/, '');
+  if (!base) throw new Error('渠道没有配置 endpoint');
+  const isAnthropic = (account.provider || '').toLowerCase() === 'anthropic' || base.includes('anthropic.com');
+  const url = base.includes('/v1') ? base + '/models' : base + '/v1/models';
+  const headers = isAnthropic
+    ? { 'x-api-key': account.apiKey || '', 'anthropic-version': '2023-06-01' }
+    : { 'Authorization': `Bearer ${account.apiKey || ''}` };
+  const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+  if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const data = await resp.json();
+  return (data.data || data.models || []).map(m => m.id || m.name).filter(Boolean);
 }
 
 function diaryEntries() {
@@ -639,6 +682,23 @@ export async function handleFaceRequest(req, res, url) {
     const body = JSON.parse(await readBody(req) || '{}');
     writeFileSync(DATA + '/settings.json', JSON.stringify(body, null, 2));
     json(res, { ok: true });
+    return true;
+  }
+
+  // 拉取渠道可用模型（设置页的"获取模型列表"按钮）
+  if (method === 'POST' && path === '/api/channel-models') {
+    const body = JSON.parse(await readBody(req) || '{}');
+    let settings = {};
+    try { settings = JSON.parse(readFileSync(DATA + '/settings.json', 'utf8')); } catch {}
+    // 优先用请求里带的渠道草稿（可能还没保存），否则按名字查已存渠道
+    const account = body.account || (settings.accounts || []).find(a => a.name === body.name);
+    if (!account) { json(res, { detail: 'channel not found' }, 404); return true; }
+    try {
+      const models = await fetchChannelModels(account);
+      json(res, { models });
+    } catch (e) {
+      json(res, { detail: e.message }, 502);
+    }
     return true;
   }
 

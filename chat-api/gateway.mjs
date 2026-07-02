@@ -901,7 +901,7 @@ function thinkingConfig(model) {
 // ============================================================
 
 export async function handleGatewaySend(reqBody, res) {
-  const { conversation_id, message, image_data, image_media_type, account: accountName, edit_at, retry } = reqBody;
+  const { conversation_id, message, image_data, image_media_type, account: accountName, model: modelOverride, edit_at, retry } = reqBody;
 
   if (!conversation_id) {
     res.writeHead(400, sseHeaders());
@@ -970,7 +970,7 @@ export async function handleGatewaySend(reqBody, res) {
   const volatileCtx = buildVolatileContext(injection, conv);
   const currentMsg = buildCurrentUserMessage(message, image_data, image_media_type, getActiveStyle(settings), volatileCtx);
 
-  const reqModel = account.model || settings.model || 'claude-sonnet-4-20250514';
+  const reqModel = modelOverride || account.model || settings.model || 'claude-sonnet-4-20250514';
   const requestBody = {
     model: reqModel,
     max_tokens: 48000, stream: true,
