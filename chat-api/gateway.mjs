@@ -905,7 +905,9 @@ async function callMcpTool(name, input, tools) {
 // Claude 5 家族与 Opus 4.8 起 API 只接受 adaptive thinking + output_config.effort，
 // 传老式 enabled+budget_tokens 会 400；更老的模型反过来不认 adaptive。按模型选。
 function thinkingConfig(model) {
-  if (/-5(-|$|\d)|opus-4-[89]|fable|mythos/.test(model)) {
+  // 家族号必须紧跟家族名：claude-sonnet-5 / claude-fable-5(-日期) 是 5 系，
+  // claude-haiku-4-5 的 "-5" 是小版本号，不算（它只认 enabled+budget）
+  if (/claude-(sonnet|opus|haiku|fable|mythos)-([5-9]|\d{2,})(-\d{8})?$/.test(model) || /opus-4-([89]|\d{2,})/.test(model)) {
     return { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
   }
   return { thinking: { type: 'enabled', budget_tokens: 32000 } };
