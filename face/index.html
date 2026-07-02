@@ -307,6 +307,7 @@ body.sidebar-action-open .rename-dialog input{-webkit-user-select:text;user-sele
       <button class="mobile-sidebar-nav-item" type="button"><span class="mobile-sidebar-nav-icon" data-icon="artifacts"></span><span>Artifacts</span></button>
       <button class="mobile-sidebar-nav-item" id="openMemory"><span class="mobile-sidebar-nav-icon" data-icon="memory"></span><span>Memory</span></button>
       <button class="mobile-sidebar-nav-item" id="openDiary"><span class="mobile-sidebar-nav-icon" data-icon="diary"></span><span>Diary</span></button>
+      <button class="mobile-sidebar-nav-item" id="openGateway"><span class="mobile-sidebar-nav-icon" id="gatewayNavIcon"></span><span>Settings</span></button>
     </nav>
     <div class="mobile-sidebar-section-title">Recents</div>
     <div class="drawer-list" id="sessionList"></div>
@@ -401,6 +402,58 @@ body.sidebar-action-open .rename-dialog input{-webkit-user-select:text;user-sele
   <div class="diary-months" id="diaryMonths"></div>
   <div class="diary-content" id="diaryContent"></div>
   <div class="diary-search-bar" id="diarySearchBar"><div class="diary-search-bubble"><span class="diary-search-icon"></span><input class="diary-search-input" id="diarySearchInput" type="text" placeholder="Search" autocomplete="off" autocorrect="off" spellcheck="false"><button class="diary-search-clear hidden" id="diarySearchClear" aria-label="Clear">×</button></div></div>
+</section>
+
+<style>
+#gatewayPanel{position:fixed;inset:0;z-index:80;display:none;background:#fbfaf7;color:#201f1d;overflow:hidden}#gatewayPanel.show{display:block}
+.gw-stat-row{display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px}.gw-stat-label{color:#77736c;font-size:15px}.gw-stat-value{font:600 17px/1.2 var(--font-sans)}
+.gw-account-input{width:100%;border:0;outline:0;background:transparent;color:#201f1d;font:400 16px/1.5 var(--font-sans);padding:4px 0}
+@media(prefers-color-scheme:dark){#gatewayPanel{background:#1F1F1D;color:#F4F3EF}.gw-stat-label{color:rgba(244,243,239,.56)}.gw-account-input{color:#F4F3EF}}
+</style>
+<section id="gatewayPanel" aria-hidden="true">
+  <div class="profile-page active" id="gwHome">
+    <header class="profile-header">
+      <button class="profile-round-button" id="closeGateway" aria-label="Close settings">×</button>
+      <div class="profile-title">Settings</div>
+      <span></span>
+    </header>
+    <p class="profile-subtitle">网关设置：系统提示词、API 账号与用量统计。改动保存后立刻生效。</p>
+    <section class="profile-section">
+      <button class="profile-nav-row" id="gwOpenPrompt"><span class="profile-nav-row-icon" data-profile-icon="pencil"></span><span class="profile-nav-row-title">System prompt<span class="profile-nav-row-note" id="gwPromptNote">Loading…</span></span><span class="profile-nav-chevron">›</span></button>
+      <button class="profile-nav-row" id="gwOpenAccounts"><span class="profile-nav-row-icon" data-profile-icon="projects"></span><span class="profile-nav-row-title">API accounts<span class="profile-nav-row-note" id="gwAccountsNote">Loading…</span></span><span class="profile-nav-chevron">›</span></button>
+      <button class="profile-nav-row" id="gwOpenStats"><span class="profile-nav-row-icon" data-profile-icon="history"></span><span class="profile-nav-row-title">Usage &amp; cache<span class="profile-nav-row-note" id="gwStatsNote">24h 统计</span></span><span class="profile-nav-chevron">›</span></button>
+    </section>
+  </div>
+  <div class="profile-page" id="gwPromptPage">
+    <header class="profile-header">
+      <button class="profile-back-button" id="gwBackFromPrompt" aria-label="Back"></button>
+      <div class="profile-title">System prompt</div>
+      <button class="profile-save-button" id="gwSavePrompt" aria-label="Save prompt" disabled>✓</button>
+    </header>
+    <p class="profile-help-text">这段文字进入缓存首段（BP1）。每次保存都会让缓存前缀整体重写一次，改动请攒着一次提交，不要逐字保存。</p>
+    <div class="profile-card profile-preferences-card">
+      <textarea class="profile-preferences-textarea" id="gwPromptText" placeholder="人设 / 系统提示词。留空则不注入。" style="min-height:50vh"></textarea>
+    </div>
+  </div>
+  <div class="profile-page" id="gwAccountsPage">
+    <header class="profile-header">
+      <button class="profile-back-button" id="gwBackFromAccounts" aria-label="Back"></button>
+      <div class="profile-title">API accounts</div>
+      <button class="profile-save-button" id="gwSaveAccounts" aria-label="Save accounts" disabled>✓</button>
+    </header>
+    <p class="profile-help-text">每个账号对应模型选择器里的一项。name 是内部标识，label 是选择器里显示的名字。</p>
+    <button class="profile-add-button" id="gwAddAccount">＋ Add account</button>
+    <div class="profile-memory-list" id="gwAccountsList"></div>
+    <div style="height:calc(46px + env(safe-area-inset-bottom) + 32px)"></div>
+  </div>
+  <div class="profile-page" id="gwStatsPage">
+    <header class="profile-header">
+      <button class="profile-back-button" id="gwBackFromStats" aria-label="Back"></button>
+      <div class="profile-title">Usage &amp; cache</div>
+      <span></span>
+    </header>
+    <div id="gwStatsContent"></div>
+  </div>
 </section>
 
 <div class="overlay" id="thoughtOverlay" aria-hidden="true" inert></div>
@@ -1978,6 +2031,29 @@ $('diarySearchClear').onclick=()=>{$('diarySearchInput').value='';$('diarySearch
 function renderDiaryMonths(){const el=$('diaryMonths');el.innerHTML='';const months=new Set();_diaryEntries.forEach(e=>{if(e.date)months.add(e.date.slice(0,7))});const sorted=[...months].sort().reverse();const all=document.createElement('button');all.className='diary-month-pill'+(_diaryMonth==='all'?' active':'');all.textContent='All';all.onclick=()=>{_diaryMonth='all';renderDiaryMonths();renderDiaryContent()};el.append(all);sorted.forEach(m=>{const btn=document.createElement('button');btn.className='diary-month-pill'+(_diaryMonth===m?' active':'');const[y,mo]=m.split('-');const names=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];btn.textContent=`${names[parseInt(mo)-1]} ${y}`;btn.onclick=()=>{_diaryMonth=m;renderDiaryMonths();renderDiaryContent()};el.append(btn)})}
 function renderDiaryContent(){const el=$('diaryContent');el.innerHTML='';const q=($('diarySearchInput')?.value||'').trim().toLowerCase();let items=_diaryEntries;if(_diaryMonth!=='all')items=items.filter(e=>e.date&&e.date.startsWith(_diaryMonth));if(q)items=items.filter(e=>e.text.toLowerCase().includes(q));if(!items.length){el.innerHTML='<div class="diary-empty">'+(q?'No matching entries':'No diary entries')+'</div>';return}let lastDate='';items.forEach(e=>{if(e.date&&e.date!==lastDate){lastDate=e.date;const h=document.createElement('div');h.className='diary-date-header';h.textContent=formatDiaryDate(e.date);el.append(h)}const d=document.createElement('div');d.className='diary-entry';d.textContent=e.text;el.append(d)})}
 function formatDiaryDate(ds){try{const[y,m,d]=ds.split('-').map(Number);const dt=new Date(y,m-1,d);const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];return `${days[dt.getDay()]}, ${months[dt.getMonth()]} ${d}, ${y}`}catch(e){return ds}}
+
+// ===== Gateway settings panel =====
+let _gwSettings=null,_gwDirtyPrompt=false,_gwDirtyAccounts=false;
+function gwShowPage(id){document.querySelectorAll('#gatewayPanel .profile-page').forEach(p=>p.classList.toggle('active',p.id===id))}
+async function gwLoad(){const r=await api('/api/settings');if(!r.ok)throw Error('load failed');_gwSettings=await r.json();gwRenderHome()}
+async function gwSave(patch){const merged={..._gwSettings,...patch};const r=await api('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(merged)});if(!r.ok)throw Error('save failed');_gwSettings=merged;gwRenderHome();toast('Saved')}
+function gwRenderHome(){const sp=_gwSettings?.systemPrompt||'';$('gwPromptNote').textContent=sp?`${sp.length} chars`:'Empty — 未注入人设';const n=(_gwSettings?.accounts||[]).length;$('gwAccountsNote').textContent=n?`${n} account${n>1?'s':''}`:'No accounts'}
+$('openGateway').onclick=async()=>{try{closeDrawer();$('gatewayPanel').classList.add('show');$('gatewayPanel').setAttribute('aria-hidden','false');gwShowPage('gwHome');await gwLoad()}catch(e){toast('Settings 加载失败')}};
+$('closeGateway').onclick=()=>{$('gatewayPanel').classList.remove('show');$('gatewayPanel').setAttribute('aria-hidden','true')};
+$('gwOpenPrompt').onclick=()=>{$('gwPromptText').value=_gwSettings?.systemPrompt||'';_gwDirtyPrompt=false;$('gwSavePrompt').disabled=true;gwShowPage('gwPromptPage')};
+$('gwPromptText').addEventListener('input',()=>{_gwDirtyPrompt=true;$('gwSavePrompt').disabled=false});
+$('gwSavePrompt').onclick=async()=>{try{await gwSave({systemPrompt:$('gwPromptText').value});_gwDirtyPrompt=false;$('gwSavePrompt').disabled=true}catch(e){toast('保存失败')}};
+$('gwBackFromPrompt').onclick=()=>{if(_gwDirtyPrompt&&!confirm('未保存的修改将丢失，确定返回？'))return;gwShowPage('gwHome')};
+const _GW_ACC_FIELDS=[['label','显示名称（模型选择器里的名字）'],['name','内部标识（唯一，如 opus）'],['endpoint','API 地址（如 https://api.anthropic.com）'],['apiKey','API Key'],['model','模型 ID（如 claude-opus-4-8）'],['provider','格式：anthropic 或 openai（留空自动判断）']];
+function gwRenderAccounts(){const list=$('gwAccountsList');list.innerHTML='';const accs=_gwSettings.accounts=(_gwSettings.accounts||[]);if(!accs.length){list.innerHTML='<div class="profile-empty">还没有账号，点上面添加</div>';return}accs.forEach((a,i)=>{const card=document.createElement('div');card.className='profile-memory-card';_GW_ACC_FIELDS.forEach(([k,ph])=>{const inp=document.createElement('input');inp.className='gw-account-input';inp.placeholder=ph;inp.value=a[k]||'';if(k==='apiKey'){inp.type='password';inp.autocomplete='off'}inp.oninput=()=>{a[k]=inp.value.trim();_gwDirtyAccounts=true;$('gwSaveAccounts').disabled=false};card.append(inp)});const actions=document.createElement('div');actions.className='profile-memory-actions';const del=document.createElement('button');del.className='profile-mini-button profile-danger';del.textContent='Delete';del.onclick=()=>{accs.splice(i,1);_gwDirtyAccounts=true;$('gwSaveAccounts').disabled=false;gwRenderAccounts()};actions.append(del);card.append(actions);list.append(card)})}
+$('gwOpenAccounts').onclick=()=>{_gwDirtyAccounts=false;$('gwSaveAccounts').disabled=true;gwRenderAccounts();gwShowPage('gwAccountsPage')};
+$('gwAddAccount').onclick=()=>{(_gwSettings.accounts=_gwSettings.accounts||[]).push({name:'',label:'',endpoint:'https://api.anthropic.com',apiKey:'',model:'',provider:'anthropic'});_gwDirtyAccounts=true;$('gwSaveAccounts').disabled=false;gwRenderAccounts()};
+$('gwSaveAccounts').onclick=async()=>{try{const accs=(_gwSettings.accounts||[]).filter(a=>a.name&&a.apiKey);await gwSave({accounts:accs});_gwDirtyAccounts=false;$('gwSaveAccounts').disabled=true;gwRenderAccounts();loadModels()}catch(e){toast('保存失败')}};
+$('gwBackFromAccounts').onclick=()=>{if(_gwDirtyAccounts&&!confirm('未保存的修改将丢失，确定返回？'))return;gwShowPage('gwHome')};
+function gwStatRow(label,value){return `<div class="gw-stat-row"><span class="gw-stat-label">${label}</span><span class="gw-stat-value">${value}</span></div>`}
+$('gwOpenStats').onclick=async()=>{gwShowPage('gwStatsPage');const el=$('gwStatsContent');el.innerHTML='<div class="profile-empty">Loading…</div>';try{const r=await api('/gateway/stats');if(!r.ok)throw Error();const s=await r.json();const u=s.tokenUsage||{};el.innerHTML='<div class="profile-card">'+gwStatRow('请求数（24h）',s.totalRequests||0)+gwStatRow('缓存命中率',(s.avgHitRate||0)+'%')+gwStatRow('命中 / 未命中',(s.cacheHits||0)+' / '+(s.cacheMisses||0))+gwStatRow('输入 tokens',(u.input||0).toLocaleString())+gwStatRow('缓存读取 tokens',(u.cacheRead||0).toLocaleString())+gwStatRow('缓存写入 tokens',(u.cacheCreate||0).toLocaleString())+gwStatRow('输出 tokens',(u.output||0).toLocaleString())+gwStatRow('错误数（24h）',s.totalErrors||0)+'</div>'}catch(e){el.innerHTML='<div class="profile-empty">统计加载失败</div>'}};
+$('gwBackFromStats').onclick=()=>gwShowPage('gwHome');
+$('gatewayNavIcon').innerHTML=_SVG_GEAR;
 ['profileSave','profileSaveMemories','profileSavePreferences'].forEach(id=>$(id).onclick=async()=>{try{await saveProfile()}catch(e){toast('保存失败')}});
 document.querySelectorAll('.profile-back-button').forEach(btn=>btn.innerHTML=icon('chevronLeft'));
 $('memorySearchBar').querySelector('.memory-search-icon').innerHTML=icon('search');
