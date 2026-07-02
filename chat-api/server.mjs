@@ -1,5 +1,5 @@
 import { handleGatewaySend, getGatewayStats, getContextBlocks, getMcpStatus } from "./gateway.mjs";
-import { handleFaceRequest } from "./face-api.mjs";
+import { handleFaceRequest, guardLegacyRequest } from "./face-api.mjs";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, statSync } from 'fs';
 import http from 'http';
 
@@ -58,6 +58,8 @@ http.createServer(async (req, res) => {
   // face（Claude.ai 风格前端壳）：静态文件 + /api/* 契约，见 face-api.mjs
   try {
     if (await handleFaceRequest(req, res, url)) return;
+    // 老端点门锁：配置了 face 认证后，公网流量访问以下路由需带 token
+    if (guardLegacyRequest(req, res)) return;
   } catch (e) {
     console.error('[face]', e.message);
     if (!res.headersSent) { json(res, { detail: e.message }, 500); }

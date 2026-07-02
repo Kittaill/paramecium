@@ -58,23 +58,18 @@ cd chat-api && node server.mjs
 两个变量都不配时 face 处于**无认证开放模式**（启动日志会警告），
 只适用于外层已有 Cloudflare Access / nginx basic auth 的部署。
 
-### Cloudflare / nginx
+### Cloudflare Tunnel（推荐，无需 nginx）
 
-给 face 单独配一个子域名，整站反代到 3800 即可：
+在 Cloudflare Tunnel 的 Public Hostnames 里加一条子域名路由，
+Service 指向 `http://localhost:3800`，就这一步。
 
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:3800;
-    proxy_http_version 1.1;
-    proxy_set_header Connection '';
-    proxy_buffering off;          # SSE 必须关缓冲
-    proxy_read_timeout 300s;
-}
-```
+老端点（`/conversations`、`/settings`、`/gateway/*`）有内置门锁：
+配置了 face 认证后，带反代转发头（cf-connecting-ip / x-forwarded-for /
+x-real-ip）的公网流量访问这些路由需要 face 的 Bearer token；
+本机 cron 和网关自己的回环调用不带这些头，照常放行。
+face 未配置密码时门锁不生效（整体开放模式，仅限有外层防护的部署）。
 
-注意：3800 上除了 face 的 `/api/*`（有认证）之外，还有网关原有的
-`/conversations`、`/settings`、`/gateway/*` 等**无认证**端点。
-公网入口务必只从反代放行，或在反代层把非 `/api` 路径挡掉/加 basic auth。
+如果走 nginx 反代，SSE 需要 `proxy_buffering off`。
 
 ## 已知边界（第一刀的刻度）
 

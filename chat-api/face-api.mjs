@@ -467,6 +467,26 @@ function readFaceProfile() {
 }
 
 // ============================================================
+//  老端点门锁 — 不依赖反代的路径过滤
+//
+//  cloudflared 直连 3800 时，/conversations /settings /gateway/* 这些
+//  无认证的老端点会一起暴露在公网。判定标准：请求带反代转发头
+//  （cf-connecting-ip / x-forwarded-for / x-real-ip）即视为外部流量，
+//  要求 face 的 Bearer token；本机 cron 和网关的回环调用不带这些头，
+//  照常放行。face 未配置密码时门锁不生效（整体开放模式）。
+// ============================================================
+
+export function guardLegacyRequest(req, res) {
+  const { password, secret } = faceCredentials();
+  if (!password || !secret) return false;
+  const external = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
+  if (!external) return false;
+  if (authOk(req)) return false;
+  unauthorized(res);
+  return true;
+}
+
+// ============================================================
 //  路由入口 — server.mjs 把请求先递到这里，认领了返回 true
 // ============================================================
 
