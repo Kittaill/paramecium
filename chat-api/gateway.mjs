@@ -881,6 +881,15 @@ async function callMcpTool(name, input, tools) {
   } catch(e) { return 'MCP error: ' + e.message; }
 }
 
+// Claude 5 家族与 Opus 4.8 起 API 只接受 adaptive thinking + output_config.effort，
+// 传老式 enabled+budget_tokens 会 400；更老的模型反过来不认 adaptive。按模型选。
+function thinkingConfig(model) {
+  if (/-5(-|$|\d)|opus-4-[89]|fable|mythos/.test(model)) {
+    return { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
+  }
+  return { thinking: { type: 'enabled', budget_tokens: 32000 } };
+}
+
 // ============================================================
 //  Main Gateway Handler
 // ============================================================
@@ -955,10 +964,11 @@ export async function handleGatewaySend(reqBody, res) {
   const volatileCtx = buildVolatileContext(injection, conv);
   const currentMsg = buildCurrentUserMessage(message, image_data, image_media_type, getActiveStyle(settings), volatileCtx);
 
+  const reqModel = account.model || settings.model || 'claude-sonnet-4-20250514';
   const requestBody = {
-    model: account.model || settings.model || 'claude-sonnet-4-20250514',
+    model: reqModel,
     max_tokens: 48000, stream: true,
-    thinking: { type: 'enabled', budget_tokens: 32000 },
+    ...thinkingConfig(reqModel),
     system: systemBlocks,
     messages: [...historyMsgs, currentMsg]
   };
