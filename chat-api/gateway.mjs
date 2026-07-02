@@ -937,6 +937,7 @@ export async function handleGatewaySend(reqBody, res) {
   const account = resolveAccount(settings, accountName);
   const isAnthropic = isAnthropicProvider(account);
   console.log(`[req] account=${accountName} resolved=${account.name} provider=${isAnthropic ? 'anthropic' : 'openai'}`);
+  if (isAnthropic) _lastReal = { convId: conversation_id, account: accountName, model: modelOverride, ts: Date.now() };
 
   // Edit / Retry
   if (typeof edit_at === 'number' && edit_at >= 0 && edit_at < (conv.messages || []).length) {
@@ -1136,6 +1137,95 @@ export async function handleGatewaySend(reqBody, res) {
     }
   }
 }
+
+// ============================================================
+//  Cache Heartbeat — 保活心跳
+//
+//  Anthropic 显式缓存 1h TTL，对话间隔一超时就要整段重写（约十倍价差）。
+//  前一版保温任务的死因：保温请求的前缀和真实请求字节对不上，纯白干。
+//  这次的配方：完全复用真实请求的构建管线（同一批 tools、同一个
+//  buildSystemBlocks、同一个 buildHistoryMessages），只把"断点之后"
+//  的易变部分换成一句心跳，max_tokens=1，不落盘、不进账本、不触发提取。
+//  只在北京时间 8-23 点跑，凌晨让缓存自然过期；闲置超 6 小时停跳。
+//  settings.cacheHeartbeat = false 可整体关闭。
+// ============================================================
+
+let _lastReal = { convId: null, account: undefined, model: undefined, ts: 0 };
+let _lastWarm = 0;
+const WARM_INTERVAL_MS = Number(process.env.WARM_INTERVAL_MS || 55 * 60000);
+const WARM_MAX_IDLE_MS = Number(process.env.WARM_MAX_IDLE_MS || 6 * 3600000);
+const WARM_CHECK_MS = Number(process.env.WARM_CHECK_MS || 60000);
+
+async function sendHeartbeat() {
+  const conv = loadConv(_lastReal.convId);
+  if (!conv?.messages?.length) return;
+  const settings = loadSettings();
+  const account = resolveAccount(settings, _lastReal.account);
+  if (!isAnthropicProvider(account)) return;
+
+  // 与 handleGatewaySend 逐行同源，保证前缀字节一致
+  const recentContext = conv.messages.filter(m => m.role === 'user').slice(-3)
+    .map(m => typeof m.content === 'string' ? m.content : '').join(' ').trim();
+  const lastReply = conv.messages.filter(m => m.role === 'assistant').slice(-1)
+    .map(m => typeof m.content === 'string' ? m.content
+      : Array.isArray(m.blocks) ? m.blocks.filter(b => b.type === 'text').map(b => b.text || '').join(' ')
+      : '').join('').trim().slice(0, 500);
+  const injection = recentContext ? await getMemoryInjection(recentContext, lastReply) : { static: '', dynamic: '', memory_ids: [] };
+  const systemBlocks = buildSystemBlocks(settings, injection, conv, true);
+  const histStart = Math.max(conv.cycleStart || 0, conv.compressedUpTo || 0);
+  // 回合结束后末尾是 assistant 回复，slice(histStart, -1) 切掉它之后，
+  // 渲染出的历史与上次真实请求在 BP4 断点以内逐字节一致（断点之外本来就不缓存），
+  // 心跳命中旧前缀的同时还会把缓存延伸到最后一条用户消息
+  const historyMsgs = buildHistoryMessages(conv.messages.slice(histStart, -1), true);
+  if (!historyMsgs.length) return;
+
+  const mcpTools = await getMcpTools(settings);
+  const toolDefs = [
+    ...await builtinTools(settings),
+    ...mcpTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }))
+  ];
+
+  const body = {
+    model: _lastReal.model || account.model || settings.model || 'claude-sonnet-4-20250514',
+    max_tokens: 1, stream: false,
+    system: systemBlocks,
+    messages: [...historyMsgs, { role: 'user', content: '(心跳)' }],
+    metadata: { user_id: USER_ID }
+  };
+  if (toolDefs.length) body.tools = toolDefs;
+
+  const endpoint = resolveEndpoint(account, true);
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': account.apiKey || settings.apiKey || '', 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000)
+    });
+    if (!resp.ok) { console.warn(`[warm] ${resp.status}: ${(await resp.text()).slice(0, 200)}`); return; }
+    const data = await resp.json();
+    const u = data.usage || {};
+    const cr = u.cache_read_input_tokens || 0, cc = u.cache_creation_input_tokens || 0, it = u.input_tokens || 0;
+    const hitRate = (cr + it) > 0 ? Math.round(cr / (cr + it) * 100) : 0;
+    // 日志说了算：HIT 说明前缀对上了；反复 MISS 说明配方又错了，该拆
+    console.log(cr > 0 ? `[warm] HIT ${hitRate}% (${cr}/${cr + it})` : `[warm] MISS (created ${cc})`);
+  } catch (e) { console.warn('[warm] failed:', e.message); }
+}
+
+setInterval(async () => {
+  try {
+    if (!_lastReal.convId) return;
+    const settings = loadSettings();
+    if (settings.cacheHeartbeat === false) return;
+    const bjHour = Number(new Date(Date.now() + 8 * 3600000).toISOString().slice(11, 13));
+    if (bjHour < 8 || bjHour >= 23) return;
+    const now = Date.now();
+    if (now - _lastReal.ts > WARM_MAX_IDLE_MS) return;
+    if (now - Math.max(_lastReal.ts, _lastWarm) < WARM_INTERVAL_MS) return;
+    _lastWarm = now;
+    await sendHeartbeat();
+  } catch (e) { console.warn('[warm] tick error:', e.message); }
+}, WARM_CHECK_MS).unref();
 
 // ============================================================
 //  Gateway Stats API
