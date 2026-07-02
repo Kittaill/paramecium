@@ -73,8 +73,10 @@ function loadConversation(id) {
 }
 
 function listConversations() {
+  // 2026-07-02: 旧部署的对话文件都是 m 前缀，face 用 UUID——按保留名单排除，不按前缀识别
+  const RESERVED = new Set(['settings.json', 'gateway-stats.json', 'memory.json', 'face-profile.json']);
   return readdirSync(DATA_DIR)
-    .filter(f => f.startsWith('m') && f.endsWith('.json'))
+    .filter(f => f.endsWith('.json') && !RESERVED.has(f))
     .map(f => f.replace('.json', ''));
 }
 
